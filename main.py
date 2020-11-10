@@ -1,182 +1,186 @@
+from __future__ import annotations
+
 import curses
-import random
-from operator import add, sub
+from dataclasses import dataclass
+from enum import Enum
+from random import Random
+from typing import FrozenSet
+from typing import List
+from typing import Optional
+from typing import Tuple
+
+random = Random(x=1389075)
 
 
-class Coordinate(tuple):
-    def __add__(self, other):
-        res = list(map(add, self, other))
-        return Coordinate(res)
+@dataclass(frozen=True)
+class Cell:
+    x: int
+    y: int
 
-    def __sub__(self, other):
-        res = list(map(sub, self, other))
-        return Coordinate(res)
+    def move(self, direction: Direction) -> Cell:
+        return Cell(self.x + direction.value.x, self.y + direction.value.y)
+
+    @classmethod
+    def get_random(cls, max_x: int, max_y: int) -> Cell:
+        return cls(random.randint(0, max_x), random.randint(0, max_y))
 
 
+class Direction(Enum):
+    value: Cell
+    UP = Cell(0, -1)
+    DOWN = Cell(0, 1)
+    LEFT = Cell(-1, 0)
+    RIGHT = Cell(1, 0)
+
+    def is_opposite(self, to: Direction) -> bool:
+        return self.value.x + to.value.x == 0 and self.value.y + to.value.y == 0
+
+
+@dataclass(frozen=True)
 class Snake:
-    def __init__(self):
-        self.body = [Coordinate((10, 5)), Coordinate((9, 5)), Coordinate((8, 5))]
-        self.grow_points = 0
+    cells: List[Cell]
+    direction: Direction
+    eaten_apples: int = 0
 
     @property
-    def head(self):
-        return self.body[0]
+    def head(self) -> Cell:
+        return self.cells[0]
 
-    def add_grow(self, points):
-        self.grow_points += points
+    @property
+    def tail(self) -> List[Cell]:
+        return self.cells[1:]
 
-    def grow(self):
-        if self.grow_points > 0:
-            self.grow_points -= 1
-        else:
-            self.body = self.body[:-1]
+    def move(self) -> Snake:
+        new_head = self.head.move(self.direction)
+        new_tail = self.cells[:-1] if not self.eaten_apples else self.cells
+        return Snake(
+            cells=[new_head, *new_tail],
+            direction=self.direction,
+            eaten_apples=max(0, self.eaten_apples - 1)
+        )
 
-    def move(self, new_direction):
-        self.grow()
+    def turn(self, direction: Optional[Direction]) -> Snake:
+        if not direction or direction.is_opposite(self.direction):
+            return self
+        return Snake(cells=self.cells, direction=direction)
 
-        if new_direction == 'up':
-            self.body = [self.head - (0, 1), *self.body]
-        if new_direction == 'down':
-            self.body = [self.head + (0, 1), *self.body]
-        if new_direction == 'left':
-            self.body = [self.head - (1, 0), *self.body]
-        if new_direction == 'right':
-            self.body = [self.head + (1, 0), *self.body]
-
-
-class Food:
-    def __init__(self, coordinate, size=1):
-        self.coordinate = coordinate
-        self.size = size
-
-    def __repr__(self):
-        return f'{self.coordinate} - {self.size}'
-
-    def __getitem__(self, item):
-        return self.coordinate[item]
-
-
-class Field:
-    def __init__(self, max_x, max_y):
-        self.max_x = max_x
-        self.max_y = max_y
-        self.cells = [Coordinate((x, y)) for x in range(max_x) for y in range(max_y)]
-        self.snake = None
-        self.food_set = set()
-        self.turn = 0
-        self.borders = {c for c in self.cells
-                        if c[0] == 0
-                        or c[1] == 0
-                        or c[0] == self.max_x - 1
-                        or c[1] == self.max_y - 1}
-
-    def get_random_cells(self, k):
-        return random.choices([c for c in self.cells if c not in self.borders], k=k)
-
-    def add_snake(self):
-        self.snake = Snake()
-        return self.snake
-
-    def add_food(self, k=2):
-        random_food_set = {Food(coordinate, random.randint(1, 3)) for coordinate in self.get_random_cells(k)}
-        self.food_set = {*self.food_set, *random_food_set}
-        return self.food_set
-
-    def add_to_borders(self, coordinates):
-        self.borders = {*self.borders, *coordinates}
-        return self.borders
-
-    def check_food(self):
-        for food in self.food_set:
-            if food.coordinate == self.snake.head:
-                self.snake.add_grow(food.size)
-                self.food_set.remove(food)
-                self.add_food(1)
-                break
-
-    def check_snake_alive(self):
-        if self.snake.head in {*self.snake.body[1:], *self.borders}:
-            return False
-        return True
+    def eat(self, apples: Apples) -> Tuple[Snake, Apples]:
+        if self.head not in apples.cells:
+            return self, apples
+        return (
+            Snake(
+                cells=self.cells,
+                direction=self.direction,
+                eaten_apples=self.eaten_apples + 1
+            ),
+            Apples(
+                width=apples.width,
+                height=apples.height,
+                cells=apples.cells - {self.head}
+            ).grow(self)
+        )
 
 
-def draw_field(win, field: Field):
-    win.border()
+@dataclass(frozen=True)
+class Apples:
+    width: int
+    height: int
+    cells: FrozenSet[Cell] = frozenset()
 
-    for food in field.food_set:
-        win.addstr(food.coordinate[1], food.coordinate[0], '123456'[food.size])
+    def grow(self, snake: Snake) -> Apples:
+        new_cell = Cell.get_random(self.width - 1, self.height - 1)
+        while new_cell in snake.cells:
+            new_cell = Cell.get_random(self.width - 1, self.height - 1)
+        return Apples(
+            width=self.width,
+            height=self.height,
+            cells=self.cells | {new_cell}
+        )
 
-    for part in field.snake.body:
-        win.addstr(part[1], part[0], '*')
 
-    turn = str(field.turn)
-    h, w = win.getmaxyx()
-    win.addstr(0, w - len(turn), turn)
+@dataclass(frozen=True)
+class Game:
+    width: int
+    height: int
+    snake: Snake
+    apples: Apples
+
+    @property
+    def is_over(self) -> bool:
+        return (
+            self.snake.head in self.snake.tail or
+            not all(0 <= c.x < self.width and 0 <= c.y < self.height for c in self.snake.cells)
+        )
+
+    @property
+    def score(self) -> int:
+        return len(self.snake.cells)
+
+    def update(self, direction: Optional[Direction]) -> Game:
+        if self.is_over:
+            return self
+        new_snake, new_apples = self.snake.turn(direction).move().eat(self.apples)
+        return Game(
+            width=self.width,
+            height=self.height,
+            snake=new_snake,
+            apples=new_apples
+        )
 
 
-def main(stdscr):
-    h, w = stdscr.getmaxyx()
-    win = curses.newwin(h, w, 0, 0)
+def draw(window, game: Game) -> None:
+    window.clear()
+    window.box()
 
-    curses.noecho()
-    curses.cbreak()
+    for c in game.apples.cells:
+        window.addstr(c.y + 1, c.x + 1, '*')
+    for c in game.snake.tail:
+        window.addstr(c.y + 1, c.x + 1, 'o')
+    window.addstr(game.snake.head.y + 1, game.snake.head.x + 1, 'Q')
 
-    win.keypad(1)
-    win.nodelay(0)
+    if game.is_over:
+        window.addstr(0, 1, 'The game is over')
+        window.addstr(1, 1, f'Score is {game.score}')
 
+    window.refresh()
+
+
+def main(window=curses.initscr()):
     curses.curs_set(0)
+    curses.halfdelay(2)
 
-    # Create field
-    field = Field(w, h)
-    field.add_food()
-    snake = field.add_snake()
-
-    draw_field(win, field)
-
-    win.refresh()
-
-    c = win.getch()
-
-    while True:
-        curses.curs_set(0)
-
-        win.nodelay(1)
-
-        k = win.getch()
-        c = k if k != -1 else c
-        # win.addstr(0, 0, str(c))
-
-        if c == ord('q'):
-            break
-        if c == curses.KEY_UP:
-            snake.move('up')
-        if c == curses.KEY_DOWN:
-            snake.move('down')
-        if c == curses.KEY_LEFT:
-            snake.move('left')
-        if c == curses.KEY_RIGHT:
-            snake.move('right')
-
-        if not field.check_snake_alive():
-            break
-
-        field.check_food()
-
-        win.clear()
-        draw_field(win, field)
-        field.turn += 1
-
-        win.refresh()
-        curses.napms(100)
-
-    win.addstr(0, 1, f'YOU DIED. SCORE {len(snake.body)}')
-    win.refresh()
-
-    win.nodelay(0)
-    win.getch()
-
-    win.keypad(0)
-    curses.endwin()
+    direction = {
+        'w': Direction.UP,
+        'a': Direction.LEFT,
+        's': Direction.DOWN,
+        'd': Direction.RIGHT
+    }
+    height = 10
+    width = 20
+    window.resize(height + 2, width + 2)
+    game = Game(
+        width=width,
+        height=height,
+        snake=Snake(
+            cells=[Cell(3, 1), Cell(2, 1), Cell(1, 1)],
+            direction=Direction.RIGHT
+        ),
+        apples=Apples(
+            width=width,
+            height=height,
+            cells=frozenset([Cell.get_random(width - 1, height - 1)])
+        )
+    )
+    input_ch = 0
+    pause = False
+    while chr(input_ch) != 'q':
+        draw(window, game)
+        input_ch = max(window.getch(), 0)
+        if chr(input_ch) == 'p':
+            pause = not pause
+        if not pause:
+            game = game.update(direction.get(chr(input_ch)))
 
 
-curses.wrapper(main)
+if __name__ == '__main__':
+    curses.wrapper(main)
